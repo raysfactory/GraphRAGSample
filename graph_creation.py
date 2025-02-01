@@ -37,9 +37,17 @@ def load_documents():
 def create_graph(documents : List[Document]):
     documents = load_documents()
 
-    llm=ChatOpenAI(temperature=0, model_name="gpt-3.5-turbo") 
-    llm_transformer = LLMGraphTransformer(llm=llm)
-    graph_documents = llm_transformer.convert_to_graph_documents(documents)
+    llm=ChatOpenAI(temperature=0, model_name="gpt-4o") 
+    llm_transformer = LLMGraphTransformer(llm=llm,
+        allowed_nodes=["Charactor", "Actor"],  
+        allowed_relationships=["Family", "Act"],
+        node_properties=["text"],
+        relationship_properties=["text"],
+        strict_mode=True,
+        additional_instructions="ノードとリレーションシップそれぞれのtextプロパティには、それぞれのノードやリレーションシップの概要を入れてください。"
+        )
+    
+    graph_documents = llm_transformer.convert_to_graph_documents(documents[0:3], )
 
     return graph_documents
 
@@ -49,21 +57,34 @@ def save_graph(graph_documents, graphdb):
 
 
 def embed_graph(graphdb):
-    vector_index = Neo4jVector.from_existing_graph(
+    vector_index = Neo4jVector.from_existing_graph( 
         OpenAIEmbeddings(model="text-embedding-ada-002"),
         search_type="hybrid",
         node_label="Document",
         text_node_properties=["text"],
         embedding_node_property="embedding"
     )
-    vector_index.create_index(graphdb)
+    vector_index = Neo4jVector.from_existing_graph( 
+        OpenAIEmbeddings(model="text-embedding-ada-002"),
+        search_type="hybrid",
+        node_label="Charactor",
+        text_node_properties=["text"],
+        embedding_node_property="embedding"
+    )
+    vector_index = Neo4jVector.from_existing_graph( 
+        OpenAIEmbeddings(model="text-embedding-ada-002"),
+        search_type="hybrid",
+        node_label=" Actor",
+        text_node_properties=["text"],
+        embedding_node_property="embedding"
+    )
+    return vector_index
 
 
 def main():
+    graphdb = Neo4jGraph()
     documents = load_documents()
     graph_documents = create_graph(documents)
-
-    graphdb = Neo4jGraph(uri=os.getenv('NEO4J_URI'), user=os.getenv('NEO4J_USER'), password=os.getenv('NEO4J_PASSWORD'))
 
     save_graph(graph_documents, graphdb)
 
