@@ -6,9 +6,8 @@ from pydantic import BaseModel, Field
 from typing import Tuple, List, Optional
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
-import os
 from langchain_community.graphs import Neo4jGraph
-#from langchain.document_loaders import WikipediaLoader
+from langchain.document_loaders import WikipediaLoader
 
 from langchain.text_splitter import TokenTextSplitter
 from langchain.text_splitter import CharacterTextSplitter
@@ -17,13 +16,15 @@ from langchain_core.documents import Document
 
 from langchain_openai import ChatOpenAI, AzureOpenAI, AzureChatOpenAI
 from langchain_experimental.graph_transformers import LLMGraphTransformer
-from neo4j import GraphDatabase
-from yfiles_jupyter_graphs import GraphWidget
 from langchain_community.vectorstores import Neo4jVector
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores.neo4j_vector import remove_lucene_chars
 from langchain_core.runnables import ConfigurableField, RunnableParallel, RunnablePassthrough
+
+from neo4j import GraphDatabase
+
 from dotenv import load_dotenv
+from typing import Dict, List
 
 # load env file
 load_dotenv()
@@ -56,29 +57,44 @@ def save_graph(graph_documents, graphdb):
     graphdb.add_graph_documents(graph_documents, baseEntityLabel=True, include_source=True)
 
 
-def embed_graph(graphdb):
-    vector_index = Neo4jVector.from_existing_graph( 
-        OpenAIEmbeddings(model="text-embedding-ada-002"),
-        search_type="hybrid",
-        node_label="Document",
-        text_node_properties=["text"],
-        embedding_node_property="embedding"
-    )
-    vector_index = Neo4jVector.from_existing_graph( 
-        OpenAIEmbeddings(model="text-embedding-ada-002"),
-        search_type="hybrid",
-        node_label="Charactor",
-        text_node_properties=["text"],
-        embedding_node_property="embedding"
-    )
-    vector_index = Neo4jVector.from_existing_graph( 
-        OpenAIEmbeddings(model="text-embedding-ada-002"),
-        search_type="hybrid",
-        node_label=" Actor",
-        text_node_properties=["text"],
-        embedding_node_property="embedding"
-    )
-    return vector_index
+def embed_graph() -> Dict[str, Neo4jVector]:
+    Document =  Neo4jVector.from_existing_graph( 
+                    OpenAIEmbeddings(model="text-embedding-ada-002"),
+                    index_name="Document_vector",
+                    keyword_index_name="Document_keyword",
+                    search_type="hybrid",
+                    node_label="Document",
+                    text_node_properties=["id", "text"],
+                    embedding_node_property="embedding")
+    Charactor= Neo4jVector.from_existing_graph( 
+                    OpenAIEmbeddings(model="text-embedding-ada-002"),
+                    index_name="Charactor_vector",
+                    keyword_index_name="Charactor_keyword",
+                    search_type="hybrid",
+                    node_label="Charactor",
+                    text_node_properties=["id", "text"],
+                    embedding_node_property="embedding")
+    Actor=     Neo4jVector.from_existing_graph( 
+                    OpenAIEmbeddings(model="text-embedding-ada-002"),
+                    index_name="Actor_vector",
+                    keyword_index_name="Actor_keyword",
+                    search_type="hybrid",
+                    node_label=" Actor",
+                    text_node_properties=["id", "text"],
+                    embedding_node_property="embedding")
+
+    vectorindexies = {
+        "Document" :  Document,
+        "Charactor" : Charactor,
+        "Actor" :     Actor
+    }
+
+    return vectorindexies
+
+
+def create_fulltextindex(graphdb: Neo4jGraph):
+    graphdb.query(
+    "CREATE FULLTEXT INDEX entity IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.id]")
 
 
 def main():
@@ -88,7 +104,7 @@ def main():
 
     save_graph(graph_documents, graphdb)
 
-    embed_graph(graphdb)
+    embed_graph()
 
 
 def sampleLLM():
