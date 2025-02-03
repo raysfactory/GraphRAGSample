@@ -6,8 +6,13 @@ from pydantic import BaseModel, Field
 from typing import Tuple, List, Optional
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain_community.graphs import Neo4jGraph
 from langchain.document_loaders import WikipediaLoader
+
+#from langchain_community.graphs import Neo4jGraph
+#from langchain_community.vectorstores import Neo4jVector
+#from langchain_community.vectorstores.neo4j_vector import remove_lucene_chars
+from langchain_neo4j import Neo4jGraph, Neo4jVector
+#from langchain.document_loaders import WikipediaLoader
 
 from langchain.text_splitter import TokenTextSplitter
 from langchain.text_splitter import CharacterTextSplitter
@@ -16,9 +21,7 @@ from langchain_core.documents import Document
 
 from langchain_openai import ChatOpenAI, AzureOpenAI, AzureChatOpenAI
 from langchain_experimental.graph_transformers import LLMGraphTransformer
-from langchain_community.vectorstores import Neo4jVector
 from langchain_openai import OpenAIEmbeddings
-from langchain_community.vectorstores.neo4j_vector import remove_lucene_chars
 from langchain_core.runnables import ConfigurableField, RunnableParallel, RunnablePassthrough
 
 from neo4j import GraphDatabase
@@ -34,7 +37,7 @@ llm=ChatOpenAI(temperature=0, model_name="gpt-4o")
 embedding=OpenAIEmbeddings(model="text-embedding-3-large")
 
 
-node_labels = ["Plactice", "Consideration", "AzureResource", "AzureImprementation"]
+node_labels = ["Plactice", "Consideration", "Azureresource", "Azureimprementation"]
 node_relationships = ["PlacticeToConsideration", "PlacticeToAzureResource", "AzureResourceToAzureImprementation", "PlacticeToAzureImprementation"]
 
 def load_documents():
@@ -56,7 +59,7 @@ def load_documents():
     documents = []
     for url in urls[3:4]:
         raw_documents = WebBaseLoader(url).load()
-        text_splitter = TokenTextSplitter(chunk_size=4000, chunk_overlap=200)
+        text_splitter = TokenTextSplitter(chunk_size=2000, chunk_overlap=100)
         documents.extend(text_splitter.split_documents(raw_documents))
     return documents
 
@@ -88,7 +91,7 @@ PlacticeToAzureImprementationリレーションシップには、PlacticeとAzur
         """
         )
     
-    graph_documents = llm_transformer.convert_to_graph_documents(documents[1:2], )
+    graph_documents = llm_transformer.convert_to_graph_documents(documents[1:3], )
 
     # 汎用的に実装する方法がなく、今回は割愛するが、対象ドメイン毎にVector距離やWork距離やLLMによる解釈などを利用して、各Nodeの重複を削除する処理が必要（エンティティ解決）
     # refer to https://neo4j.com/developer-blog/global-graphrag-neo4j-langchain/
@@ -98,11 +101,13 @@ PlacticeToAzureImprementationリレーションシップには、PlacticeとAzur
 
 def save_graph(graph_documents, graphdb):
     print(graph_documents)
-    graphdb.add_graph_documents(graph_documents, baseEntityLabel=True, include_source=True)
+    for graph_document in graph_documents:
+        graphdb.add_graph_documents([graph_document], baseEntityLabel=True, include_source=True)
 
 
 def embed_graph() -> Dict[str, Neo4jVector]:
     index_dict = {}
+    index_dict["Document"] = _embed_index("Document")
     for node_label in node_labels:
         index_dict[node_label] = _embed_index(node_label)
     return index_dict
