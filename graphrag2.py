@@ -56,7 +56,7 @@ def vector_node_search(vector_index: Neo4jVector, query:str):
 
 def get_target_node_types(question:str):
     message = [
-        SystemMessage(content= """
+        SystemMessage(content= f"""
         次の質問に回答するために、Graph内のどのノードをVector検索するかを教えてください。
         また回答するためにノード間の関係を取得するための対象のノードタイプも教えてください。
         また、複数の関係を指定する場合は、カンマ区切りで指定してください。
@@ -112,11 +112,13 @@ def node_relation_search(nodes, nodetype:str, destnodetype:str):
 
 def main():
 
-    question = "サザエさんは誰と結婚しているのか？"
+    question = "タラオの家族は？"
 
     # 対象ノードタイプを検討
     target_node_types = get_target_node_types(question)
     target_node_types = target_node_types.split(',')
+
+    noderel_contexts = ""
     # 対象ノードをHybrid検索
     for node_type in target_node_types:
         node_types = node_type.split('->')
@@ -128,13 +130,14 @@ def main():
         # 対象ノード間の関係を取得
         noderel_context = node_relation_search(nodes, target_node, dest_node)
         print(noderel_context)
+        noderel_contexts += noderel_context
 
     message = [
-        SystemMessage(content= """
+        SystemMessage(content= f"""
         次の質問に回答するために、与えられたコンテキストをもとに回答してください
                       
         -- context --------------------
-        "{noderel_context}"
+        "{noderel_contexts}"
         """),
         HumanMessage(content=question)]
     res = llm.invoke(message)

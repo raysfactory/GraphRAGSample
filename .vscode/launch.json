@@ -10,8 +10,9 @@
             "type": "debugpy",
             "request": "launch",
             "program": "${file}",
-            "console": "integratedTerminal"
-            "envFile": "${workspaceFolder}/openai.env"
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "python": ".venv/bin/python"
         }
     ]
 }
