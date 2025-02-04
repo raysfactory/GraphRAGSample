@@ -9,3 +9,4 @@ tiktoken
 yfiles_jupyter_graphs
 python-dotenv
 json-repair
+joblib

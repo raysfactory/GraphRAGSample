@@ -1,6 +1,7 @@
 from langchain_core.runnables import (RunnableBranch, RunnableLambda, RunnableParallel,RunnablePassthrough)
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.prompts.prompt import PromptTemplate
+from openai import RateLimitError
 from pydantic import BaseModel, Field
 
 from typing import Tuple, List, Optional
@@ -28,17 +29,22 @@ from neo4j import GraphDatabase
 
 from dotenv import load_dotenv
 from typing import Dict, List
+from joblib import Parallel, delayed
+import time
+
+from util.knowlege_util import node_labels, relationship_labels, embed_graph
 
 # load env file
 load_dotenv()
 
 # OpenAI models
-llm=ChatOpenAI(temperature=0, model_name="gpt-4o") 
+#llm=ChatOpenAI(temperature=0, model_name="gpt-4o") 
+llm=ChatOpenAI(temperature=0, model_name="gpt-4o-mini") 
 embedding=OpenAIEmbeddings(model="text-embedding-3-large")
 
+# Neo4j Graph
+graphdb = Neo4jGraph()
 
-node_labels = ["Plactice", "Consideration", "Azureresource", "Azureimprementation"]
-node_relationships = ["PlacticeToConsideration", "PlacticeToAzureResource", "AzureResourceToAzureImprementation", "PlacticeToAzureImprementation"]
 
 def load_documents():
     urls = [
@@ -56,21 +62,36 @@ def load_documents():
         "https://learn.microsoft.com/ja-jp/azure/architecture/best-practices/retry-service-specific",
         "https://learn.microsoft.com/ja-jp/azure/architecture/best-practices/transient-faults"
     ]
-    documents = []
-    for url in urls[3:4]:
-        raw_documents = WebBaseLoader(url).load()
-        text_splitter = TokenTextSplitter(chunk_size=2000, chunk_overlap=100)
-        documents.extend(text_splitter.split_documents(raw_documents))
-    return documents
+    # URL毎に並列に処理を実施する
+    import concurrent.futures
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        results = list(executor.map(process_url, urls))
+
+        # 結果を取得
+        future = concurrent.futures.as_completed(results)
+
+
+def process_url(url):
+    start_time = time.time()
+
+    print(f"START : processing : {url}")
+    raw_documents = WebBaseLoader(url).load()
+    text_splitter = TokenTextSplitter(chunk_size=2000, chunk_overlap=100)
+    documents = text_splitter.split_documents(raw_documents)
+    graphs = create_graph(url, documents)
+    print(f"PRG   : graph created : {url}")
+    sage_graph(url, graphs)
+
+    elapsed_time = time.time() - start_time
+    print(f"END   : processing : {url} (Elapsed time: {elapsed_time:.2f} seconds)")
 
 
 
-def create_graph(documents : List[Document]):
-    documents = load_documents()
+def create_graph(url, documents : List[Document]):
 
     llm_transformer = LLMGraphTransformer(llm=llm,
         allowed_nodes=node_labels,  
-        allowed_relationships=node_relationships,
+        allowed_relationships=relationship_labels,
         node_properties=["text"],
         relationship_properties=["text"],
         strict_mode=True,
@@ -90,53 +111,57 @@ AzureResourceToAzureImprementationリレーションシップには、AzureResou
 PlacticeToAzureImprementationリレーションシップには、PlacticeとAzureImprementationの関係性に関する情報を入れてください。
         """
         )
-    
-    graph_documents = llm_transformer.convert_to_graph_documents(documents[1:3], )
-
-    # 汎用的に実装する方法がなく、今回は割愛するが、対象ドメイン毎にVector距離やWork距離やLLMによる解釈などを利用して、各Nodeの重複を削除する処理が必要（エンティティ解決）
-    # refer to https://neo4j.com/developer-blog/global-graphrag-neo4j-langchain/
+    graph_documents = []
+    for doc in documents:
+        # 状況に応じてエラーが発生するため、処理の完遂を優先し、エラー時はログ出力のみして続行します。
+        rate_limit_retry(url, lambda:
+                         graph_documents.extend(llm_transformer.convert_to_graph_documents([doc])))
 
     return graph_documents
 
 
-def save_graph(graph_documents, graphdb):
-    print(graph_documents)
+def rate_limit_retry(url, func):
+    retrycount = 0
+    while True:
+        try:
+            return func()
+        except RateLimitError as e:
+            retrycount += 1
+            print(f"ERROR!:{url}")
+            print(e)
+            if retrycount >= 5:
+                print("!!!! Retry count exceeded. Aborting.")
+                return
+            retry_after = float(e.response.headers.get("retry-after", 5))
+            print(f"Rate limit exceeded. Retrying after {retry_after} seconds...")
+            time.sleep(retry_after)
+
+
+def sage_graph(url, graph_documents):
     for graph_document in graph_documents:
-        graphdb.add_graph_documents([graph_document], baseEntityLabel=True, include_source=True)
+        try:
+            graphdb.add_graph_documents([graph_document], baseEntityLabel=True, include_source=True)
+        except Exception as e:
+            print(f"ERROR!:{url}")
+            print(e)
 
-
-def embed_graph() -> Dict[str, Neo4jVector]:
-    index_dict = {}
-    index_dict["Document"] = _embed_index("Document")
-    for node_label in node_labels:
-        index_dict[node_label] = _embed_index(node_label)
-    return index_dict
-
-
-def _embed_index(node_label: str) -> Neo4jVector:
-    return Neo4jVector.from_existing_graph(
-        embedding=embedding,
-        index_name=f"{node_label}_vector",
-        keyword_index_name=f"{node_label}_keyword",
-        search_type="hybrid",
-        node_label=node_label,
-        text_node_properties=["id", "text"],
-        embedding_node_property="embedding"
-    )
 
 
 def create_fulltextindex(graphdb: Neo4jGraph):
     graphdb.query(
-    "CREATE FULLTEXT INDEX entity IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.id]")
+    "CREATE FULLTEXT INDEX ftx_entity IF NOT EXISTS FOR (e:__Entity__) ON EACH [e.id]")
 
 
 def main():
-    graphdb = Neo4jGraph()
-    documents = load_documents()
-    graph_documents = create_graph(documents)
+    load_documents()
+    #create_graph(documents)
 
-    save_graph(graph_documents, graphdb)
-    embed_graph()
+    # 汎用的に実装する方法がなく、今回は割愛するが、対象ドメイン毎にVector距離やWork距離やLLMによる解釈などを利用して、各Nodeの重複を削除する処理が必要（エンティティ解決）
+    # refer to https://neo4j.com/developer-blog/global-graphrag-neo4j-langchain/
+
+
+    embed_graph(embedding)
+    create_fulltextindex(graphdb)
 
 
 if __name__ == "__main__":

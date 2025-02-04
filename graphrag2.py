@@ -27,23 +27,26 @@ from langchain_core.runnables import ConfigurableField, RunnableParallel, Runnab
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, SystemMessage
 
-
 from dotenv import load_dotenv
 from graph_creation import embed_graph
 from pprint import pprint
 from time import sleep
 
+from util.knowlege_util import node_labels, relationship_labels, embed_graph
 
 # load env file
 load_dotenv()
 
+# OpenAI models
+llm = ChatOpenAI(temperature=0, model_name="gpt-4o")
+embedding=OpenAIEmbeddings(model="text-embedding-3-large")
 
+# Neo4j Graph
 graphdb = Neo4jGraph()
 graphdb.refresh_schema()  # DBからスキーマを取得
 
-vector_indexies = embed_graph()
-
-llm = ChatOpenAI(temperature=0, model_name="gpt-4o")
+# neo4j Vector Indexis
+vector_indexies = embed_graph(embedding)
 
 
 
@@ -54,14 +57,12 @@ def vector_node_search(vector_index: Neo4jVector, query:str):
     return documents
 
 
-
-
 def get_target_node_types(question:str):
     message = [
         SystemMessage(content= f"""
 次の質問に回答するために、Graph内のどのノードをVector検索するかを教えてください。
 また、複数のノードの種類を指定する場合は、カンマ区切りで指定してください。
-
+出力する際は、"- output"は含めない
                 
 Graph DBのスキーマは以下の通り
 
@@ -98,7 +99,7 @@ def node_relation_search(nodes, nodetype:str, destnodetype:str):
         WHERE p1.id = '{id}'
         RETURN p1.id, p1.text, p2.id, p2.text, r1.id, r1.text, type(r1) as r1_type
         """
-        cypher_response.append(graphdb.query(cypher))   
+        cypher_response.append(graphdb.query(cypher))
     
     noderel_context = ""
     for rels in cypher_response:
@@ -122,6 +123,7 @@ def node_relation_search_generatequery(question:str, nodes, nodetype:str):
 必ずvector検索済みのidを利用するように記載します。
 vector検索済みのノードは、{nodetype}です。
 {nodetype}はvector検索済みのIDが利用でき、nodeのid値にvectorと入力します。
+"作成されたクエリの先頭にcyptherを記載してはならない"
 
 Graph DBのスキーマは以下の通り
 
@@ -161,7 +163,8 @@ RETURN p.id, p.text, r.id, r.text, c.id, c.text
     for node in nodes:
         id = node.page_content.split('\n')[1].split(': ')[1].strip()
         cypher = query.replace('vector', id)
-        cypher_response.append(graphdb.query(cypher))   
+
+        cypher_response.append(cypher_execute_with_retry(cypher, question, nodetype))
 
     noderel_context = ""
     for rels in cypher_response:
@@ -170,10 +173,49 @@ RETURN p.id, p.text, r.id, r.text, c.id, c.text
     return  noderel_context
 
 
+def cypher_execute_with_retry(cypher, question, nodetype, retry_count=3):
+    for _ in range(retry_count):
+        try:
+            return graphdb.query(cypher)
+        except Exception as e:
+            error_message = str(e)
+            correction_message = [
+                SystemMessage(content= f"""
+あなたは、要求をもとにCypherクエリを作成するエージェントです。
+次のエラーを修正するためのCypherクエリを作成してください。
+必ずvector検索済みのidを利用するように記載します。
+vector検索済みのノードは、{nodetype}です。
+{nodetype}はvector検索済みのIDが利用でき、nodeのid値にvectorと入力します。
+"作成されたクエリの先頭にcyptherを記載してはならない"
 
-def main():
+出力内容は、そのまま実行可能なCypherクエリである必要があります。
+出力内容にはコメントで、クエリの修正内容を記載してください。
+"作成されたクエリの先頭にcyptherを記載してはならない"
 
-    question = "バッチ処理のプラクティスを実施する上で検討するべきAzureリソースは？"
+Graph DBのスキーマは以下の通り
+
+-- graph schema -------------------- 
+“{graphdb.structured_schema}”
+
+
+-- node and relationship description --------------------
+Placticeノードには、Document内にて言及されている各種実現方式などのプラクティスに関する情報
+Considerationノードには、各Plactice内にて言及されている考慮事項に関する情報
+AzureResourceノードには、各Placticeを実現するために利用できる、Azureのリソース種別名
+AzureImprementationノードには、各Plactice内にて言及されているAzureでの実装に関する情報
+
+"""),
+                HumanMessage(content=f"""
+次のエラーを修正するためのCypherクエリを作成してください。
+ユーザからの問い合わせ: {question}
+エラーメッセージ: {error_message}
+元のクエリ: {cypher}""")]
+            correction_res = llm.invoke(correction_message)
+            cypher = correction_res.content
+    raise Exception(f"Failed to execute query after {retry_count} retries")
+
+
+def runQA(question:str):
 
     # 対象ノードタイプを検討
     target_node_types = get_target_node_types(question)
@@ -202,8 +244,16 @@ def main():
 
     print(res)
 
+def main():
+    question = "Azure LogicAppsに関連したPlacticeは？"
+    runQA(question)
+
+    # コンソールからの入力を受け付ける
+    while True:
+        question = input("質問を入力してください: ")
+        runQA(question)
+
 
 if __name__ == "__main__":
     main()
-    sleep(1)
 
