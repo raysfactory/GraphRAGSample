@@ -31,6 +31,7 @@ from dotenv import load_dotenv
 from graph_creation import embed_graph
 from pprint import pprint
 from time import sleep
+import pprint
 
 from util.knowlege_util import node_labels, relationship_labels, embed_graph
 
@@ -53,7 +54,7 @@ vector_indexies = embed_graph(embedding)
 def vector_node_search(vector_index: Neo4jVector, query:str):    
     # クエリを設定して検索を実行
     # (このサンプルではVector Index作成する際にHybrid Indexを作成しているため、Hybrid Indexを使用して検索を行う)
-    documents = vector_index.similarity_search(query, k=2)
+    documents = vector_index.similarity_search(query, k=3)
     return documents
 
 
@@ -71,7 +72,7 @@ Graph DBのスキーマは以下の通り
 
 
 -- node and relationship description --------------------
-Placticeノードには、Document内にて言及されている各種実現方式などのプラクティスに関する情報
+Placticeノードは、Document内にて言及されている各種実現方式などのプラクティスに関する情報
 Considerationノードには、各Plactice内にて言及されている考慮事項に関する情報
 Azureresourceノードには、各Placticeを実現するために利用できる、Azureのリソース種別名
 Azureimprementationノードには、各Plactice内にて言及されているAzureでの実装に関する情報
@@ -119,10 +120,12 @@ def node_relation_search_generatequery(question:str, nodes, nodetype:str):
 
     message = [
         SystemMessage(content= f"""
+
 次の質問に回答するために、Graphを探索する実行可能なCypher Qeuryを作成してください。 
 必ずvector検索済みのidを利用するように記載します。
-vector検索済みのノードは、{nodetype}です。
-{nodetype}はvector検索済みのIDが利用でき、nodeのid値にvectorと入力します。
+
+vector検索済みのノードは、"{nodetype}"です。
+{nodetype}のノードに対しid値にvectorで検索してください。
 "作成されたクエリの先頭にcyptherを記載してはならない"
 
 Graph DBのスキーマは以下の通り
@@ -154,17 +157,29 @@ vector検索済みのノードがPlacticeの場合
 MATCH (p:Plactice)-[r:PLACTICETOCONSIDERATION]-(c:Consideration)
 WHERE p.id = 'vector'
 RETURN p.id, p.text, r.id, r.text, c.id, c.text
+
+--回答例3---------------------
+vector検索済みのノードがConsiderationの場合
+- input :  バッチ処理のプラクティスに関して注意すべき事項
+- output :  
+// バッチ処理のプラクティスに関して注意すべき事項を取得
+MATCH (c:Consideration)-[r:PLACTICETOCONSIDERATION]-(p:Plactice)
+WHERE c.id = 'vector'
+RETURN c.id, c.text, r.id, r.text, p.id, p.text
 """),
         HumanMessage(content=question)]
     res = llm.invoke(message)
     query = res.content
+#    print(f"# node type : {nodetype}. generated query : {query}")
 
     cypher_response = []
     for node in nodes:
         id = node.page_content.split('\n')[1].split(': ')[1].strip()
-        cypher = query.replace('vector', id)
 
-        cypher_response.append(cypher_execute_with_retry(cypher, question, nodetype))
+        query_result = cypher_execute_with_retry(query, question, nodetype, nodeid=id)
+        print(f"# node type : {nodetype}, id : {id},\n related result :\n")
+        pprint.pprint(query_result)        
+        cypher_response.append(query_result)
 
     noderel_context = ""
     for rels in cypher_response:
@@ -173,9 +188,11 @@ RETURN p.id, p.text, r.id, r.text, c.id, c.text
     return  noderel_context
 
 
-def cypher_execute_with_retry(cypher, question, nodetype, retry_count=3):
+def cypher_execute_with_retry(query, question, nodetype, nodeid, retry_count=3):
     for _ in range(retry_count):
         try:
+            cypher = query.replace('vector', nodeid)
+            print(f"# node type : {nodetype}. generated query : {cypher}")
             return graphdb.query(cypher)
         except Exception as e:
             error_message = str(e)
@@ -211,7 +228,7 @@ AzureImprementationノードには、各Plactice内にて言及されているAz
 エラーメッセージ: {error_message}
 元のクエリ: {cypher}""")]
             correction_res = llm.invoke(correction_message)
-            cypher = correction_res.content
+            query = correction_res.content
     raise Exception(f"Failed to execute query after {retry_count} retries")
 
 
@@ -221,37 +238,46 @@ def runQA(question:str):
     target_node_types = get_target_node_types(question)
     target_node_types = [node_type.strip() for node_type in target_node_types.split(',')]
 
+    print(f"# hybrid search node types : {target_node_types}")
+
     noderel_contexts = ""
     # 対象ノードをHybrid検索
     for node_type in target_node_types:
         nodes = vector_node_search(vector_indexies[node_type], question)
+        print(f"# node type : {node_type} vector search result count : {len(nodes)}")
 
         # 対象ノード間の関係を取得
         noderel_context = node_relation_search_generatequery(question, nodes, node_type)
-
-        print(noderel_context)
         noderel_contexts += noderel_context
 
     message = [
         SystemMessage(content= f"""
-        次の質問に回答するために、与えられたコンテキストをもとに回答してください
+次の質問に回答するために、必ず与えられたコンテキストだけを利用して回答してください
+contextは、この回答をするために、検索された各種関連情報でこれらをまとめた上で回答ください
+                
+-- context --------------------
+aはAzureResourceのノード
+rはリレーションシップ
+pはプラクティスのノード
+iはAzureでの実装のノード
+cはConsiderationのノード
                       
-        -- context --------------------
-        "{noderel_contexts}"
-        """),
+"{noderel_contexts}"
+"""),
         HumanMessage(content=question)]
     res = llm.invoke(message)
+    return res.content
 
-    print(res)
 
 def main():
-    question = "Azure LogicAppsに関連したPlacticeは？"
-    runQA(question)
+#    question = "Azure LogicAppsに関連したPlacticeは？"
+#    runQA(question)
 
     # コンソールからの入力を受け付ける
     while True:
         question = input("質問を入力してください: ")
-        runQA(question)
+        answer = runQA(question)
+        print("# graph rag result : " + answer)
 
 
 if __name__ == "__main__":

@@ -70,7 +70,6 @@ def load_documents():
         # 結果を取得
         future = concurrent.futures.as_completed(results)
 
-
 def process_url(url):
     start_time = time.time()
 
@@ -80,7 +79,7 @@ def process_url(url):
     documents = text_splitter.split_documents(raw_documents)
     graphs = create_graph(url, documents)
     print(f"PRG   : graph created : {url}")
-    sage_graph(url, graphs)
+    save_graph(url, graphs)
 
     elapsed_time = time.time() - start_time
     print(f"END   : processing : {url} (Elapsed time: {elapsed_time:.2f} seconds)")
@@ -137,7 +136,7 @@ def rate_limit_retry(url, func):
             time.sleep(retry_after)
 
 
-def sage_graph(url, graph_documents):
+def save_graph(url, graph_documents):
     for graph_document in graph_documents:
         try:
             graphdb.add_graph_documents([graph_document], baseEntityLabel=True, include_source=True)
