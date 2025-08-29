@@ -1,8 +1,8 @@
 from langchain_neo4j import Neo4jGraph, Neo4jVector
 from typing import Dict, List
 
-node_labels = ["Plactice", "Consideration", "Azureresource", "Azureimprementation"]
-relationship_labels = ["PlacticeToConsideration", "PlacticeToAzureResource", "AzureResourceToAzureImprementation", "PlacticeToAzureImprementation"]
+node_labels = ["Practice", "Consideration", "Azureresource", "Azureimplementation"]
+relationship_labels = ["PracticeToConsideration", "PracticeToAzureResource", "AzureResourceToAzureImplementation", "PracticeToAzureImplementation"]
 
 
 def embed_graph(embedding) -> Dict[str, Neo4jVector]:
