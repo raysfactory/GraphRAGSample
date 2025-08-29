@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 from typing import Tuple, List, Optional
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.output_parsers import StrOutputParser
-from langchain.document_loaders import WikipediaLoader
+from langchain_community.document_loaders import WikipediaLoader
 
 #from langchain_community.graphs import Neo4jGraph
 #from langchain_community.vectorstores import Neo4jVector
@@ -15,9 +15,8 @@ from langchain.document_loaders import WikipediaLoader
 from langchain_neo4j import Neo4jGraph, Neo4jVector
 #from langchain.document_loaders import WikipediaLoader
 
-from langchain.text_splitter import TokenTextSplitter
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.document_loaders import TextLoader, WebBaseLoader
+from langchain_text_splitters import TokenTextSplitter, CharacterTextSplitter
+from langchain_community.document_loaders import TextLoader, WebBaseLoader
 from langchain_core.documents import Document
 
 from langchain_openai import ChatOpenAI, AzureOpenAI, AzureChatOpenAI
